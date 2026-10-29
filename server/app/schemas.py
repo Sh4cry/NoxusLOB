@@ -24,6 +24,9 @@ class OrderResponse(BaseModel):
     status: str
     trades_count: int
     trades: List[dict]
+    engine_status: str = "ACCEPTED_NO_FILL"
+    resting: bool = False
+    unfilled_quantity: int = 0
 
 class LevelSummaryModel(BaseModel):
     price: float

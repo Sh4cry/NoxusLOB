@@ -4,6 +4,7 @@
 #include <chrono>
 #include <random>
 #include <algorithm>
+#include <array>
 #include <numeric>
 #include <iomanip>
 #include <cmath>
@@ -14,7 +15,8 @@ enum class BenchmarkOpType : uint8_t {
     ADD_LIMIT = 0,
     CANCEL = 1,
     CROSSING_LIMIT = 2,
-    MARKET_SWEEP = 3
+    MARKET_SWEEP = 3,
+    MODIFY = 4
 };
 
 struct PreGeneratedOp {
@@ -64,7 +66,7 @@ std::vector<PreGeneratedOp> generateWorkload(size_t orderCount) {
 
     std::mt19937_64 rng(1337); // Deterministic seed
     std::uniform_int_distribution<uint32_t> sideDist(0, 1);
-    std::uniform_int_distribution<uint32_t> opDist(0, 9); // 0-5: Limit, 6-7: Cancel, 8: Cross, 9: Market
+    std::uniform_int_distribution<uint32_t> opDist(0, 11); // 50% add, 17% cancel, 8% modify, 17% cross, 8% sweep
     std::uniform_int_distribution<uint32_t> priceOffsetDist(1, 15);
     std::uniform_int_distribution<uint32_t> qtyDist(1, 50);
 
@@ -100,6 +102,11 @@ std::vector<PreGeneratedOp> generateWorkload(size_t orderCount) {
             restingOrderIds.pop_back();
             shadowBook.cancelOrder(item.cancelId);
         } else if (op == 8) {
+            item.opType = BenchmarkOpType::MODIFY;
+            const size_t idx = rng() % restingOrderIds.size();
+            item.cancelId = restingOrderIds[idx];
+            shadowBook.modifyOrder(item.cancelId, qty);
+        } else if (op < 11) {
             // Aggressive Crossing Limit Order (Liquidity Taker)
             item.opType = BenchmarkOpType::CROSSING_LIMIT;
             item.orderType = OrderType::LIMIT;
@@ -161,6 +168,8 @@ void warmupEngine(const std::vector<PreGeneratedOp>& ops, size_t warmupCount) {
         const auto& op = ops[i];
         if (op.opType == BenchmarkOpType::CANCEL) {
             warmupBook.cancelOrder(op.cancelId);
+        } else if (op.opType == BenchmarkOpType::MODIFY) {
+            warmupBook.modifyOrder(op.cancelId, op.qty);
         } else {
             warmupBook.addOrder(op.id, op.side, op.orderType, op.price, op.qty);
         }
@@ -177,19 +186,21 @@ SingleRunResult runSingleBenchmark(const std::vector<PreGeneratedOp>& workload) 
     size_t cancelsAttempted = 0;
     size_t cancelsSucceeded = 0;
 
-    auto tStart = std::chrono::high_resolution_clock::now();
+    auto tStart = std::chrono::steady_clock::now();
     for (const auto& op : workload) {
         if (op.opType == BenchmarkOpType::CANCEL) {
             ++cancelsAttempted;
             if (throughputBook.cancelOrder(op.cancelId)) {
                 ++cancelsSucceeded;
             }
+        } else if (op.opType == BenchmarkOpType::MODIFY) {
+            throughputBook.modifyOrder(op.cancelId, op.qty);
         } else {
             auto trades = throughputBook.addOrder(op.id, op.side, op.orderType, op.price, op.qty);
             totalTrades += trades.size();
         }
     }
-    auto tEnd = std::chrono::high_resolution_clock::now();
+    auto tEnd = std::chrono::steady_clock::now();
     double totalSec = std::chrono::duration<double>(tEnd - tStart).count();
 
     // 2. Latency Profiling Run (pre-allocated measurement array)
@@ -199,13 +210,15 @@ SingleRunResult runSingleBenchmark(const std::vector<PreGeneratedOp>& workload) 
 
     for (size_t i = 0; i < latencySamples; ++i) {
         const auto& op = workload[i];
-        auto op0 = std::chrono::high_resolution_clock::now();
+        auto op0 = std::chrono::steady_clock::now();
         if (op.opType == BenchmarkOpType::CANCEL) {
             latencyBook.cancelOrder(op.cancelId);
+        } else if (op.opType == BenchmarkOpType::MODIFY) {
+            latencyBook.modifyOrder(op.cancelId, op.qty);
         } else {
             latencyBook.addOrder(op.id, op.side, op.orderType, op.price, op.qty);
         }
-        auto op1 = std::chrono::high_resolution_clock::now();
+        auto op1 = std::chrono::steady_clock::now();
         latenciesUs[i] = std::chrono::duration<double, std::micro>(op1 - op0).count();
     }
 
@@ -286,6 +299,10 @@ int main(int argc, char* argv[]) {
     if (argc > 2) {
         numRuns = std::stoull(argv[2]);
     }
+    if (orderCount == 0 || numRuns == 0) {
+        std::cerr << "Workload size and run count must both be greater than zero.\n";
+        return 2;
+    }
 
     std::cout << "===========================================================\n";
     std::cout << "       NoxusLOB Isolated C++20 Benchmark Suite            \n";
@@ -293,6 +310,8 @@ int main(int argc, char* argv[]) {
     std::cout << "[*] Workload Size  : " << orderCount << " operations / run\n";
     std::cout << "[*] Repeated Runs  : " << numRuns << " consecutive iterations\n";
     std::cout << "[*] Workload Setup : Shadow-book pre-generated in RAM (0 RNG in hot loop)\n";
+    std::cout << "[*] Workload Seed  : 1337 (50% add / 17% cancel / 8% modify / 17% cross / 8% sweep)\n";
+    std::cout << "[*] Measurement    : Direct C++ OrderBook API; ctypes/FFI excluded\n";
     std::cout << "[*] Cache Warm-Up  : 10,000 operations cache prime\n";
 #if defined(__clang__)
     std::cout << "[*] Compiler       : Clang " << __clang_version__ << "\n";
@@ -300,6 +319,18 @@ int main(int argc, char* argv[]) {
     std::cout << "[*] Compiler       : GCC " << __VERSION__ << "\n";
 #elif defined(_MSC_VER)
     std::cout << "[*] Compiler       : MSVC " << _MSC_VER << "\n";
+#endif
+#if defined(_WIN32)
+    std::cout << "[*] Platform       : Windows\n";
+#elif defined(__linux__)
+    std::cout << "[*] Platform       : Linux\n";
+#elif defined(__APPLE__)
+    std::cout << "[*] Platform       : macOS\n";
+#endif
+#if defined(NDEBUG)
+    std::cout << "[*] Build Mode     : Release (NDEBUG)\n";
+#else
+    std::cout << "[*] Build Mode     : assertions enabled\n";
 #endif
     std::cout << "[*] C++ Standard   : C++" << (__cplusplus / 100 % 100) << "\n";
     std::cout << "===========================================================\n";
@@ -314,7 +345,8 @@ int main(int argc, char* argv[]) {
         std::cout << "  Run #" << (i + 1) << ": " << (r.throughputOpsPerSec / 1e6) << "M ops/s | "
                   << "p50: " << r.p50Us << " µs | "
                   << "p90: " << r.p90Us << " µs | "
-                  << "p99: " << r.p99Us << " µs\n";
+                  << "p99: " << r.p99Us << " µs | "
+                  << "p99.9: " << r.p999Us << " µs\n";
     }
 
     const auto& best = summary.runs[0];
@@ -324,6 +356,15 @@ int main(int argc, char* argv[]) {
     std::cout << "Cancels Attempted: " << best.cancelsAttempted << "\n";
     std::cout << "Cancels Succeeded: " << best.cancelsSucceeded << " ("
               << summary.meanCancelSuccessRate << "% verified resting cancellations)\n";
+    std::array<size_t, 5> operationCounts{};
+    for (const auto& op : generateWorkload(orderCount)) {
+        ++operationCounts[static_cast<size_t>(op.opType)];
+    }
+    std::cout << "Operation Mix     : add=" << operationCounts[0]
+              << ", cancel=" << operationCounts[1]
+              << ", cross=" << operationCounts[2]
+              << ", sweep=" << operationCounts[3]
+              << ", modify=" << operationCounts[4] << "\n";
 
     std::cout << "\n--- STATISTICAL AGGREGATES (" << numRuns << " Runs) ---\n";
     std::cout << "Throughput       : " << (summary.meanThroughput / 1e6) << " M ops/sec "

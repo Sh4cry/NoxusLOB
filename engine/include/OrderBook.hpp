@@ -18,6 +18,8 @@ public:
     ~OrderBook();
 
     // Core Matching Engine API
+    OrderResult submitOrder(OrderId id, Side side, OrderType type, Price price, Quantity qty, Timestamp ts = 0);
+    // Compatibility wrapper. Use submitOrder when rejection status matters.
     std::vector<Trade> addOrder(OrderId id, Side side, OrderType type, Price price, Quantity qty, Timestamp ts = 0);
     bool cancelOrder(OrderId id);
     bool modifyOrder(OrderId id, Quantity newQty);
@@ -47,8 +49,8 @@ public:
 
 private:
     // Internal matching routines
-    std::vector<Trade> matchBuyOrder(Order* order);
-    std::vector<Trade> matchSellOrder(Order* order);
+    void matchBuyOrder(Order* order, std::vector<Trade>& trades);
+    void matchSellOrder(Order* order, std::vector<Trade>& trades);
 
     void addOrderToBook(Order* order);
     void removeOrderFromBook(Order* order);

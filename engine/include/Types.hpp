@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 #include <chrono>
+#include <utility>
 
 namespace noxus {
 
@@ -24,6 +25,14 @@ enum class OrderType : uint8_t {
     FOK = 3     // Fill-Or-Kill
 };
 
+enum class OrderStatus : uint8_t {
+    ACCEPTED_NO_FILL = 0,
+    ACCEPTED_WITH_FILLS = 1,
+    REJECTED_INVALID_INPUT = 2,
+    REJECTED_DUPLICATE_ID = 3,
+    REJECTED_FOK_UNFILLED = 4
+};
+
 inline const char* sideToString(Side side) {
     return side == Side::BUY ? "BUY" : "SELL";
 }
@@ -41,7 +50,7 @@ inline const char* orderTypeToString(OrderType type) {
 inline Timestamp currentTimestampNs() {
     return static_cast<Timestamp>(
         std::chrono::duration_cast<std::chrono::nanoseconds>(
-            std::chrono::high_resolution_clock::now().time_since_epoch()
+            std::chrono::system_clock::now().time_since_epoch()
         ).count()
     );
 }
@@ -65,6 +74,18 @@ struct L2Snapshot {
     Timestamp timestamp{0};
     std::vector<LevelSummary> bids;
     std::vector<LevelSummary> asks;
+};
+
+struct OrderResult {
+    OrderStatus status{OrderStatus::REJECTED_INVALID_INPUT};
+    std::vector<Trade> trades;
+    Quantity unfilledQty{0};
+    bool resting{false};
+
+    bool accepted() const noexcept {
+        return status == OrderStatus::ACCEPTED_NO_FILL ||
+               status == OrderStatus::ACCEPTED_WITH_FILLS;
+    }
 };
 
 } // namespace noxus

@@ -3,8 +3,6 @@
 #include "Order.hpp"
 #include <vector>
 #include <memory>
-#include <stdexcept>
-#include <cassert>
 
 namespace noxus {
 
@@ -29,16 +27,19 @@ public:
         T* ptr = m_freeList.back();
         m_freeList.pop_back();
         ptr->reset();
+        ptr->poolInUse = true;
+        ptr->poolOwner = this;
         ++m_activeAllocations;
         return ptr;
     }
 
     // O(1) return to free list
-    void deallocate(T* ptr) {
-        if (ptr == nullptr) return;
+    bool deallocate(T* ptr) {
+        if (ptr == nullptr || !ptr->poolInUse || ptr->poolOwner != this) return false;
         ptr->reset();
         m_freeList.push_back(ptr);
         --m_activeAllocations;
+        return true;
     }
 
     size_t activeCount() const noexcept {
@@ -52,7 +53,9 @@ public:
 private:
     void allocateBlock(size_t size) {
         auto block = std::make_unique<T[]>(size);
-        m_freeList.reserve(m_freeList.size() + size);
+        m_freeList.reserve(m_totalCapacity + size);
+        // Complete vector allocations before publishing pointers into the block.
+        m_blocks.reserve(m_blocks.size() + 1);
         for (size_t i = 0; i < size; ++i) {
             m_freeList.push_back(&block[i]);
         }
