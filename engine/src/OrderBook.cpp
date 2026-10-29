@@ -71,28 +71,25 @@ Quantity OrderBook::getAskVolume() const noexcept {
     return total;
 }
 
-std::vector<Trade> OrderBook::addOrder(OrderId id, Side side, OrderType type, Price price, Quantity qty, Timestamp ts) {
-    if (qty == 0 || hasOrder(id)) {
-        return {}; // Invalid quantity or duplicate order id
+OrderResult OrderBook::submitOrder(OrderId id, Side side, OrderType type, Price price, Quantity qty, Timestamp ts) {
+    const bool validSide = side == Side::BUY || side == Side::SELL;
+    const bool validType = type == OrderType::LIMIT || type == OrderType::MARKET ||
+                           type == OrderType::IOC || type == OrderType::FOK;
+    if (!validSide || !validType || id == 0 || qty == 0 ||
+        (type != OrderType::MARKET && price == 0)) {
+        return {OrderStatus::REJECTED_INVALID_INPUT, {}, qty, false};
+    }
+    if (hasOrder(id)) {
+        return {OrderStatus::REJECTED_DUPLICATE_ID, {}, qty, false};
     }
 
     if (ts == 0) {
         ts = currentTimestampNs();
     }
 
-    // Allocate order from object pool
-    Order* order = m_pool.allocate();
-    order->id = id;
-    order->price = price;
-    order->initialQty = qty;
-    order->remainingQty = qty;
-    order->side = side;
-    order->type = type;
-    order->timestamp = ts;
-
     // Handle FOK (Fill-Or-Kill) pre-check
     if (type == OrderType::FOK) {
-        Quantity availableVolume = 0;
+        uint64_t availableVolume = 0;
         if (side == Side::BUY) {
             for (const auto& [askPrice, level] : m_asks) {
                 if (price > 0 && askPrice > price) break;
@@ -108,25 +105,66 @@ std::vector<Trade> OrderBook::addOrder(OrderId id, Side side, OrderType type, Pr
         }
 
         if (availableVolume < qty) {
-            m_pool.deallocate(order);
-            return {}; // Cannot fully fill, kill order immediately
+            return {OrderStatus::REJECTED_FOK_UNFILLED, {}, qty, false};
         }
     }
 
-    // Match order
-    std::vector<Trade> trades;
+    // Reserve enough room before mutating makers so recording fills cannot
+    // allocate partway through a match.
+    size_t maxTradeCount = 0;
     if (side == Side::BUY) {
-        trades = matchBuyOrder(order);
+        for (const auto& [askPrice, level] : m_asks) {
+            if (type != OrderType::MARKET && askPrice > price) break;
+            maxTradeCount += level.orderCount();
+        }
     } else {
-        trades = matchSellOrder(order);
+        for (const auto& [bidPrice, level] : m_bids) {
+            if (type != OrderType::MARKET && bidPrice < price) break;
+            maxTradeCount += level.orderCount();
+        }
+    }
+    std::vector<Trade> trades;
+    trades.reserve(std::min<size_t>(maxTradeCount, qty));
+
+    // Allocate and initialize only after preflight allocations have succeeded.
+    Order* order = m_pool.allocate();
+    order->id = id;
+    order->price = price;
+    order->initialQty = qty;
+    order->remainingQty = qty;
+    order->side = side;
+    order->type = type;
+    order->timestamp = ts;
+
+    try {
+        if (side == Side::BUY) {
+            matchBuyOrder(order, trades);
+        } else {
+            matchSellOrder(order, trades);
+        }
+    } catch (...) {
+        if (order->poolInUse) m_pool.deallocate(order);
+        throw;
     }
 
-    return trades;
+    Quantity filledQty = 0;
+    for (const Trade& trade : trades) {
+        filledQty += trade.quantity;
+    }
+    const bool resting = hasOrder(id);
+    return {
+        trades.empty() ? OrderStatus::ACCEPTED_NO_FILL : OrderStatus::ACCEPTED_WITH_FILLS,
+        std::move(trades),
+        static_cast<Quantity>(qty - filledQty),
+        resting
+    };
 }
 
-std::vector<Trade> OrderBook::matchBuyOrder(Order* order) {
-    std::vector<Trade> trades;
+std::vector<Trade> OrderBook::addOrder(OrderId id, Side side, OrderType type, Price price, Quantity qty, Timestamp ts) {
+    return submitOrder(id, side, type, price, qty, ts).trades;
+}
 
+void OrderBook::matchBuyOrder(Order* order, std::vector<Trade>& trades) {
     while (!m_asks.empty() && order->remainingQty > 0) {
         auto askIt = m_asks.begin();
         Price bestAsk = askIt->first;
@@ -180,12 +218,9 @@ std::vector<Trade> OrderBook::matchBuyOrder(Order* order) {
         m_pool.deallocate(order);
     }
 
-    return trades;
 }
 
-std::vector<Trade> OrderBook::matchSellOrder(Order* order) {
-    std::vector<Trade> trades;
-
+void OrderBook::matchSellOrder(Order* order, std::vector<Trade>& trades) {
     while (!m_bids.empty() && order->remainingQty > 0) {
         auto bidIt = m_bids.begin();
         Price bestBid = bidIt->first;
@@ -239,27 +274,31 @@ std::vector<Trade> OrderBook::matchSellOrder(Order* order) {
         m_pool.deallocate(order);
     }
 
-    return trades;
 }
 
 void OrderBook::addOrderToBook(Order* order) {
-    m_orderIndex[order->id] = order;
+    auto appendToSide = [this, order](auto& side) {
+        auto level = side.find(order->price);
+        const bool createdLevel = level == side.end();
+        if (createdLevel) level = side.emplace(order->price, PriceLevel(order->price)).first;
+        try {
+            const auto [index, inserted] = m_orderIndex.emplace(order->id, order);
+            (void)index;
+            if (!inserted) {
+                if (createdLevel) side.erase(level);
+                return false;
+            }
+            level->second.append(order);
+            return true;
+        } catch (...) {
+            if (createdLevel) side.erase(level);
+            throw;
+        }
+    };
     if (order->side == Side::BUY) {
-        auto it = m_bids.find(order->price);
-        if (it == m_bids.end()) {
-            auto [insertedIt, success] = m_bids.emplace(order->price, PriceLevel(order->price));
-            insertedIt->second.append(order);
-        } else {
-            it->second.append(order);
-        }
-    } else {
-        auto it = m_asks.find(order->price);
-        if (it == m_asks.end()) {
-            auto [insertedIt, success] = m_asks.emplace(order->price, PriceLevel(order->price));
-            insertedIt->second.append(order);
-        } else {
-            it->second.append(order);
-        }
+        if (!appendToSide(m_bids)) m_pool.deallocate(order);
+    } else if (!appendToSide(m_asks)) {
+        m_pool.deallocate(order);
     }
 }
 
@@ -328,8 +367,8 @@ bool OrderBook::modifyOrder(OrderId id, Quantity newQty) {
 L2Snapshot OrderBook::getL2Snapshot(size_t depth) const {
     L2Snapshot snapshot;
     snapshot.timestamp = currentTimestampNs();
-    snapshot.bids.reserve(depth);
-    snapshot.asks.reserve(depth);
+    snapshot.bids.reserve(std::min(depth, m_bids.size()));
+    snapshot.asks.reserve(std::min(depth, m_asks.size()));
 
     size_t count = 0;
     for (const auto& [price, level] : m_bids) {

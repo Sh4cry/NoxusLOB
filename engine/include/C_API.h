@@ -31,11 +31,45 @@ typedef struct {
 } CLevel;
 #pragma pack(pop)
 
+typedef struct {
+    uint8_t status;
+    uint8_t resting;
+    uint16_t reserved;
+    uint32_t unfilledQty;
+    CTrade* trades;
+    uint32_t tradeCount;
+} COrderResult;
+
+enum {
+    NOXUS_ORDER_ACCEPTED_NO_FILL = 0,
+    NOXUS_ORDER_ACCEPTED_WITH_FILLS = 1,
+    NOXUS_ORDER_REJECTED_INVALID_INPUT = 2,
+    NOXUS_ORDER_REJECTED_DUPLICATE_ID = 3,
+    NOXUS_ORDER_REJECTED_FOK_UNFILLED = 4
+};
+
 // Primary Noxus C API
 NOXUS_EXPORT void* noxus_create_book(uint32_t capacity);
 NOXUS_EXPORT void noxus_destroy_book(void* bookPtr);
 NOXUS_EXPORT void noxus_clear_book(void* bookPtr);
+// Result owns its trade array until noxus_free_order_result is called.
+// Returns 0 on API success, -1 for invalid arguments, -2 for allocation failure,
+// and -3 for an unexpected C++ exception.
+NOXUS_EXPORT int noxus_submit_order(
+    void* bookPtr,
+    uint64_t id,
+    uint8_t side,
+    uint8_t type,
+    uint32_t price,
+    uint32_t qty,
+    uint64_t ts,
+    COrderResult* outResult
+);
+NOXUS_EXPORT void noxus_free_order_result(COrderResult* result);
 
+// Compatibility API. The return value is the total number of fills produced;
+// outTradeCount is the number copied into outTrades. A smaller copied count
+// explicitly indicates truncation. Prefer noxus_submit_order for full results.
 NOXUS_EXPORT int noxus_add_order(
     void* bookPtr,
     uint64_t id,
@@ -69,6 +103,17 @@ NOXUS_EXPORT void noxus_get_l2_depth(
 NEXUS_EXPORT void* nexus_create_book(uint32_t capacity);
 NEXUS_EXPORT void nexus_destroy_book(void* bookPtr);
 NEXUS_EXPORT void nexus_clear_book(void* bookPtr);
+NEXUS_EXPORT int nexus_submit_order(
+    void* bookPtr,
+    uint64_t id,
+    uint8_t side,
+    uint8_t type,
+    uint32_t price,
+    uint32_t qty,
+    uint64_t ts,
+    COrderResult* outResult
+);
+NEXUS_EXPORT void nexus_free_order_result(COrderResult* result);
 
 NEXUS_EXPORT int nexus_add_order(
     void* bookPtr,

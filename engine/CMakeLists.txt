@@ -5,11 +5,18 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# Optimization flags
+# Keep optimization decisions with CMAKE_BUILD_TYPE so Debug and Release
+# exercise different configurations as documented.
 if(MSVC)
-    add_compile_options(/O2 /W4 /permissive-)
+    add_compile_options(/W4 /permissive-)
 else()
-    add_compile_options(-O3 -Wall -Wextra -Wpedantic -march=native)
+    add_compile_options(-Wall -Wextra -Wpedantic)
+endif()
+
+option(NOXUS_ENABLE_SANITIZERS "Build with AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
+if(NOXUS_ENABLE_SANITIZERS AND NOT MSVC)
+    add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+    add_link_options(-fsanitize=address,undefined)
 endif()
 
 include_directories(include)
@@ -28,6 +35,7 @@ add_library(noxus_engine_static STATIC
 # Unit Tests Executable
 add_executable(test_matching
     tests/test_matching.cpp
+    src/C_API.cpp
 )
 target_link_libraries(test_matching PRIVATE noxus_engine_static)
 

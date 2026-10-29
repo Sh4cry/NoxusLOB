@@ -16,6 +16,8 @@ struct Order {
     // Intrusive doubly linked list pointers for O(1) queue insertion and unlinking
     Order* prev{nullptr};
     Order* next{nullptr};
+    bool poolInUse{false};
+    const void* poolOwner{nullptr};
 
     void reset() {
         id = 0;
@@ -27,6 +29,8 @@ struct Order {
         timestamp = 0;
         prev = nullptr;
         next = nullptr;
+        poolInUse = false;
+        poolOwner = nullptr;
     }
 
     bool isFilled() const {

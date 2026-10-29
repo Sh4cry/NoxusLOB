@@ -2,14 +2,18 @@ name: NoxusLOB CI Pipeline
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main, master, "codex/**" ]
   pull_request:
     branches: [ main, master ]
 
 jobs:
   build-and-test-engine:
-    name: C++20 Engine Build & Benchmarks
+    name: C++20 Engine (${{ matrix.build_type }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        build_type: [Debug, Release]
 
     steps:
       - name: Checkout Code
@@ -22,16 +26,30 @@ jobs:
           sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 100 --slave /usr/bin/g++ g++ /usr/bin/g++-12
 
       - name: Configure CMake
-        run: cmake -B engine/build -S engine -DCMAKE_BUILD_TYPE=Release
+        run: cmake -B engine/build -S engine -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
 
       - name: Build C++ Binaries
-        run: cmake --build engine/build --config Release
+        run: cmake --build engine/build --config ${{ matrix.build_type }}
 
-      - name: Run Engine Test Suite
-        run: ./engine/build/test_matching
+      - name: Run Engine Tests
+        run: ctest --test-dir engine/build --output-on-failure
 
-      - name: Run Latency Benchmark
-        run: ./engine/build/benchmarks 250000
+      - name: Run Benchmark Smoke Check
+        if: matrix.build_type == 'Release'
+        run: ./engine/build/benchmarks 50000 3
+
+  engine-sanitizers:
+    name: C++ Engine Address and Undefined Behavior Sanitizers
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure Sanitizer Build
+        run: >-
+          cmake -B engine/build-sanitized -S engine -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer"
+          -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+      - name: Build and Run Tests
+        run: cmake --build engine/build-sanitized --config Debug && ctest --test-dir engine/build-sanitized --output-on-failure
 
   test-python-gateway:
     name: Python Gateway & Unit Tests

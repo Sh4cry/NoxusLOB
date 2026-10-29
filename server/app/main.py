@@ -2,7 +2,7 @@ import asyncio
 import time
 import json
 import os
-from typing import Set, List, Dict, Any, Optional
+from typing import Set, List, Dict, Any, Optional, Literal
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query
@@ -197,7 +197,7 @@ def get_models():
     }
 
 @app.post("/api/v1/models/select")
-async def select_model(mode: str = Query(..., enum=["AVELLANEDA_STOIKOV", "MARKOV", "DATA_REPLAY"])):
+async def select_model(mode: Literal["AVELLANEDA_STOIKOV", "MARKOV", "DATA_REPLAY"] = Query(...)):
     global active_model_mode
     active_model_mode = mode
     if mode == "AVELLANEDA_STOIKOV":
@@ -221,7 +221,7 @@ def get_agent_status():
     return feeder_agent.get_status()
 
 @app.post("/api/v1/agent/start")
-async def start_agent(mode: str = Query("WEB_FEED", enum=["SCREEN_UIA", "WEB_FEED"]), symbol: str = "BTCUSDT", interval_sec: float = 1.0):
+async def start_agent(mode: Literal["SCREEN_UIA", "WEB_FEED"] = Query("WEB_FEED"), symbol: str = "BTCUSDT", interval_sec: float = 1.0):
     feeder_agent.start(mode=mode, symbol=symbol, interval_sec=interval_sec)
     return {"status": "started", "config": feeder_agent.get_status()}
 
@@ -237,21 +237,26 @@ async def scan_screen_now():
 
 @app.post("/api/v1/orders", response_model=OrderResponse)
 def place_order(order: OrderRequest):
-    order_id, trades = engine.add_order(
+    result = engine.submit_order(
         order_id=order.id,
         side=order.side.value,
         order_type=order.order_type.value,
         price_dollars=order.price,
         quantity=order.quantity,
     )
+    order_id = result["id"]
+    trades = result["trades"]
     for tr in trades:
         handle_trade(tr)
 
     return OrderResponse(
         id=order_id,
-        status="FILLED" if trades else "PLACED",
+        status=("FILLED" if trades else "PLACED") if result["accepted"] else "REJECTED",
+        engine_status=result["status"],
         trades_count=len(trades),
         trades=trades,
+        resting=result["resting"],
+        unfilled_quantity=result["unfilled_quantity"],
     )
 
 @app.delete("/api/v1/orders/{order_id}")
