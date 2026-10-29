@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <iostream>
 #include <map>
+#include <limits>
 #include <random>
 #include <stdexcept>
 #include <string>
@@ -285,6 +286,34 @@ void testPoolRejectsDoubleDeallocate() {
     std::cout << "[TEST] Pool ownership, double-free, growth and reuse... PASSED\n";
 }
 
+void testVolumeCapacityPreservesBook() {
+    const Quantity maximum = std::numeric_limits<Quantity>::max();
+    OrderBook book(8);
+    CHECK(book.submitOrder(1, Side::BUY, OrderType::LIMIT, 9900, maximum - 1).accepted());
+    CHECK(book.submitOrder(2, Side::BUY, OrderType::LIMIT, 9900, 1).accepted());
+    CHECK(book.getBidVolume() == maximum);
+    CHECK(book.getL2Snapshot(1).bids[0].quantity == maximum);
+    CHECK(book.submitOrder(3, Side::BUY, OrderType::LIMIT, 9800, 1).status == OrderStatus::REJECTED_CAPACITY);
+    CHECK(!book.modifyOrder(2, 2));
+    CHECK(book.getOrder(2)->remainingQty == 1);
+    CHECK(book.submitOrder(4, Side::SELL, OrderType::LIMIT, 10000, 1).accepted());
+    // Even a partially marketable limit must be rejected before executing any fill.
+    CHECK(book.submitOrder(5, Side::BUY, OrderType::LIMIT, 10000, 2).status == OrderStatus::REJECTED_CAPACITY);
+    CHECK(book.getOrder(4)->remainingQty == 1);
+    CHECK(book.submitOrder(6, Side::BUY, OrderType::LIMIT, 10000, 1).trades.size() == 1);
+    CHECK(book.getAskVolume() == 0);
+    auto sweep = book.submitOrder(7, Side::SELL, OrderType::MARKET, 0, maximum);
+    CHECK(sweep.unfilledQty == 0 && sweep.trades.size() == 2);
+    CHECK(book.getBidVolume() == 0);
+    CHECK(book.orderCount() == 0);
+    CHECK(book.poolActiveCount() == 0);
+    CHECK(book.submitOrder(8, Side::SELL, OrderType::LIMIT, 10000, maximum).accepted());
+    CHECK(book.submitOrder(9, Side::SELL, OrderType::LIMIT, 10100, 1).status == OrderStatus::REJECTED_CAPACITY);
+    book.clear();
+    CHECK(book.getBidVolume() == 0 && book.getAskVolume() == 0);
+    std::cout << "[TEST] Volume capacity and rejection before mutation... PASSED\n";
+}
+
 class ReferenceBook {
 public:
     struct RefOrder {
@@ -563,6 +592,7 @@ int main() {
     testL2DepthSnapshotInvariants();
     testTypedOrderResults();
     testPoolRejectsDoubleDeallocate();
+    testVolumeCapacityPreservesBook();
     testSeededReferenceSequences();
     testCAbiReportsAllFills();
     } catch (const std::exception& error) {

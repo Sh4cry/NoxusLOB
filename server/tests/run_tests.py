@@ -3,6 +3,7 @@ import sys
 import os
 import httpx
 from unittest.mock import patch
+from concurrent.futures import ThreadPoolExecutor
 
 # Add server directory to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -156,6 +157,32 @@ class TestGateway(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(bridge.get_l2_depth()["bids"][0]["quantity"], 3)
             self.assertEqual(bridge.submit_order(2, "SELL", "IOC", 100.00, 1.5)["status"],
                              "REJECTED_INVALID_INPUT")
+
+    def test_bridge_serializes_concurrent_callers(self):
+        native = EngineBridge()
+        self.assertTrue(native.is_cpp_backend)
+        for bridge in (native, EngineBridge(force_python=True)):
+            with ThreadPoolExecutor(max_workers=4) as workers:
+                results = list(workers.map(
+                    lambda order_id: bridge.submit_order(order_id, "BUY", "LIMIT", 100.00, 1),
+                    range(1, 201)))
+                self.assertTrue(all(result["accepted"] for result in results))
+                self.assertEqual(bridge.order_count(), 200)
+                self.assertEqual(bridge.get_l2_depth()["bids"][0]["quantity"], 200)
+                self.assertTrue(all(workers.map(bridge.cancel_order, range(1, 201))))
+            self.assertEqual(bridge.order_count(), 0)
+
+    def test_bridge_volume_capacity_matches_native_and_fallback(self):
+        native = EngineBridge()
+        self.assertTrue(native.is_cpp_backend)
+        for bridge in (native, EngineBridge(force_python=True)):
+            self.assertTrue(bridge.submit_order(1, "BUY", "LIMIT", 99, 4294967295)["accepted"])
+            self.assertEqual(bridge.submit_order(2, "BUY", "LIMIT", 98, 1)["status"], "REJECTED_CAPACITY")
+            self.assertFalse(bridge.modify_order(1, 4294967296))
+            bridge.submit_order(3, "SELL", "LIMIT", 100, 1)
+            self.assertEqual(bridge.submit_order(4, "BUY", "LIMIT", 100, 2)["status"], "REJECTED_CAPACITY")
+            self.assertEqual(bridge.get_l2_depth()["asks"][0]["quantity"], 1)
+            self.assertEqual(bridge.get_l2_depth()["bids"][0]["quantity"], 4294967295)
 
 if __name__ == "__main__":
     unittest.main()

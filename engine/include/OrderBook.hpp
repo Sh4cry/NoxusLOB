@@ -63,8 +63,10 @@ private:
 
     // O(1) order lookup
     std::unordered_map<OrderId, Order*> m_orderIndex;
+    Quantity m_bidVolume{0};
+    Quantity m_askVolume{0};
 
-    // Zero-allocation memory pool for orders
+    // Recycled order-node pool; grows when its preallocated capacity is exhausted.
     OrderPool m_pool;
 };
 

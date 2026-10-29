@@ -7,12 +7,12 @@ interface LatencyStatsProps {
 }
 
 export const LatencyStats: React.FC<LatencyStatsProps> = ({ metrics }) => {
-  const p50 = metrics ? metrics.p50_us.toFixed(2) : '0.10';
-  const p95 = metrics ? metrics.p95_us.toFixed(2) : '0.45';
-  const p99 = metrics ? metrics.p99_us.toFixed(2) : '0.80';
+  const p50 = metrics ? metrics.p50_us.toFixed(2) : '--';
+  const p95 = metrics ? metrics.p95_us.toFixed(2) : '--';
+  const p99 = metrics ? metrics.p99_us.toFixed(2) : '--';
   const throughput = metrics 
     ? (metrics.throughput_ops_sec / 1e6).toFixed(2) + 'M' 
-    : '3.99M';
+    : '--';
 
   return (
     <div className="bg-surface rounded-xl border border-surfaceBorder p-4 flex flex-col gap-3 shadow-lg">
@@ -20,12 +20,12 @@ export const LatencyStats: React.FC<LatencyStatsProps> = ({ metrics }) => {
         <div className="flex items-center gap-2">
           <Gauge className="w-4 h-4 text-brandCyan" />
           <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-300">
-            Engine Latency & Telemetry
+            Gateway Latency & Throughput
           </h2>
         </div>
         <div className="flex items-center gap-1.5 text-[11px] text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20 font-mono">
           <ShieldCheck className="w-3.5 h-3.5" />
-          <span>Sub-Microsecond Core</span>
+          <span>{metrics ? 'Measured gateway sample' : 'Run a stress test'}</span>
         </div>
       </div>
 
@@ -39,7 +39,7 @@ export const LatencyStats: React.FC<LatencyStatsProps> = ({ metrics }) => {
           <div className="text-lg font-bold font-mono text-slate-100 mt-1">
             {throughput} <span className="text-xs font-normal text-slate-400">ops/sec</span>
           </div>
-          <div className="text-[10px] text-slate-500 mt-0.5">Peak benchmark capacity</div>
+          <div className="text-[10px] text-slate-500 mt-0.5">Includes Python and FFI</div>
         </div>
 
         {/* p50 Median */}
@@ -51,7 +51,7 @@ export const LatencyStats: React.FC<LatencyStatsProps> = ({ metrics }) => {
           <div className="text-lg font-bold font-mono text-emerald-400 mt-1">
             {p50} <span className="text-xs font-normal text-slate-400">µs</span>
           </div>
-          <div className="text-[10px] text-slate-500 mt-0.5">~100 nanoseconds</div>
+          <div className="text-[10px] text-slate-500 mt-0.5">Median gateway operation</div>
         </div>
 
         {/* p95 */}
@@ -75,7 +75,7 @@ export const LatencyStats: React.FC<LatencyStatsProps> = ({ metrics }) => {
           <div className="text-lg font-bold font-mono text-indigo-400 mt-1">
             {p99} <span className="text-xs font-normal text-slate-400">µs</span>
           </div>
-          <div className="text-[10px] text-slate-500 mt-0.5">Guaranteed SLA bound</div>
+          <div className="text-[10px] text-slate-500 mt-0.5">Observed 99th percentile</div>
         </div>
       </div>
     </div>

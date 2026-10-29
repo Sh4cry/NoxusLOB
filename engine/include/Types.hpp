@@ -30,7 +30,8 @@ enum class OrderStatus : uint8_t {
     ACCEPTED_WITH_FILLS = 1,
     REJECTED_INVALID_INPUT = 2,
     REJECTED_DUPLICATE_ID = 3,
-    REJECTED_FOK_UNFILLED = 4
+    REJECTED_FOK_UNFILLED = 4,
+    REJECTED_CAPACITY = 5
 };
 
 inline const char* sideToString(Side side) {

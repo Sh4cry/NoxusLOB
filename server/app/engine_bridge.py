@@ -42,6 +42,7 @@ ORDER_STATUS = {
     2: "REJECTED_INVALID_INPUT",
     3: "REJECTED_DUPLICATE_ID",
     4: "REJECTED_FOK_UNFILLED",
+    5: "REJECTED_CAPACITY",
 }
 
 def _serialized(method):
@@ -387,7 +388,7 @@ class EngineBridge:
 
         opposite = self._py_asks if side_code == 0 else self._py_bids
         eligible_prices = sorted(opposite, reverse=(side_code == 1))
-        if type_code == 3:
+        if type_code in (0, 3):
             available = 0
             for level_price in eligible_prices:
                 if side_code == 0 and level_price > price_cents:
@@ -397,8 +398,13 @@ class EngineBridge:
                 available += sum(order["qty"] for order in opposite[level_price])
                 if available >= quantity:
                     break
-            if available < quantity:
+            if type_code == 3 and available < quantity:
                 return {**invalid, "status": "REJECTED_FOK_UNFILLED"}
+            if type_code == 0:
+                own_volume = sum(order["qty"] for order in self._py_orders.values()
+                                 if order["side"] == side_code)
+                if own_volume + max(0, quantity - available) > 4294967295:
+                    return {**invalid, "status": "REJECTED_CAPACITY"}
 
         trades = []
         now_ns = time.time_ns()
@@ -469,6 +475,10 @@ class EngineBridge:
     def _py_modify_order(self, order_id, new_qty):
         order = self._py_orders.get(order_id)
         if order is None or new_qty <= 0 or new_qty > 4294967295:
+            return False
+        own_volume = sum(resting["qty"] for resting in self._py_orders.values()
+                         if resting["side"] == order["side"])
+        if own_volume - order["qty"] + new_qty > 4294967295:
             return False
         if new_qty <= order["qty"]:
             order["qty"] = new_qty

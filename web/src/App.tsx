@@ -235,7 +235,7 @@ export const App: React.FC = () => {
               <div className="bg-background p-4 rounded-lg border border-surfaceBorder space-y-2">
                 <h3 className="font-bold text-sm text-indigo-400">3. C-ABI & Direct FFI Bridge</h3>
                 <p className="text-xs text-slate-400 leading-relaxed">
-                  Exported as a clean C-ABI shared library with packed memory layouts, enabling high-level Python simulation scripts and WebSockets to interact directly with the C++ engine with sub-microsecond overhead.
+                  Exported as a C-ABI shared library with explicit order outcomes and complete fill lists, enabling Python simulation scripts and WebSockets to interact with the C++ engine.
                 </p>
               </div>
 
@@ -255,10 +255,10 @@ export const App: React.FC = () => {
               </h3>
               <ul className="text-xs text-slate-300 space-y-2 list-disc list-inside">
                 <li>
-                  <strong className="text-white">High-Performance Systems (C++20):</strong> Architected a low-latency price-time priority Limit Order Book matching engine in C++20, achieving <strong>3.52M operations/second</strong> throughput with a median latency of <strong>0.20 µs</strong> and a p99 tail latency of <strong>0.94 µs</strong> in isolated benchmarks.
+                  <strong className="text-white">Matching Engine (C++20):</strong> Implemented price-time priority, maker-price execution, and limit, market, IOC, and FOK orders. A seeded reference test compares fills and book state after every operation; the CLI reproduces the core benchmark.
                 </li>
                 <li>
-                  <strong className="text-white">Order-Node Memory Pool:</strong> Eliminated dynamic order-node allocation churn during trading execution by engineering a custom contiguous slab memory pool and intrusive doubly-linked price queues for \(O(1)\) order cancellations.
+                  <strong className="text-white">Order-Node Memory Pool:</strong> Reused preallocated order nodes with ownership and double-free checks. Intrusive price queues provide constant-time unlinking after the order and price level are located.
                 </li>
                 <li>
                   <strong className="text-white">Full-Stack & Real-Time Telemetry:</strong> Built an event-driven market data gateway in FastAPI/WebSockets streaming L2 book updates at 20Hz to a high-framerate React/Vite trading terminal featuring interactive depth charts and microsecond latency profiling.

@@ -2,7 +2,7 @@ name: NoxusLOB CI Pipeline
 
 on:
   push:
-    branches: [ main, master, "codex/**" ]
+    branches: [ "**" ]
   pull_request:
     branches: [ main, master ]
 
@@ -46,8 +46,7 @@ jobs:
       - name: Configure Sanitizer Build
         run: >-
           cmake -B engine/build-sanitized -S engine -DCMAKE_BUILD_TYPE=Debug
-          -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer"
-          -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+          -DNOXUS_ENABLE_SANITIZERS=ON
       - name: Build and Run Tests
         run: cmake --build engine/build-sanitized --config Debug && ctest --test-dir engine/build-sanitized --output-on-failure
 

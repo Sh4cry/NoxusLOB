@@ -1,5 +1,6 @@
 #include "OrderBook.hpp"
 #include <algorithm>
+#include <limits>
 
 namespace noxus {
 
@@ -19,6 +20,8 @@ void OrderBook::clear() {
     m_orderIndex.clear();
     m_bids.clear();
     m_asks.clear();
+    m_bidVolume = 0;
+    m_askVolume = 0;
 }
 
 bool OrderBook::hasOrder(OrderId id) const noexcept {
@@ -56,19 +59,11 @@ std::optional<double> OrderBook::getMidPrice() const noexcept {
 }
 
 Quantity OrderBook::getBidVolume() const noexcept {
-    Quantity total = 0;
-    for (const auto& [price, level] : m_bids) {
-        total += level.totalQuantity();
-    }
-    return total;
+    return m_bidVolume;
 }
 
 Quantity OrderBook::getAskVolume() const noexcept {
-    Quantity total = 0;
-    for (const auto& [price, level] : m_asks) {
-        total += level.totalQuantity();
-    }
-    return total;
+    return m_askVolume;
 }
 
 OrderResult OrderBook::submitOrder(OrderId id, Side side, OrderType type, Price price, Quantity qty, Timestamp ts) {
@@ -87,41 +82,31 @@ OrderResult OrderBook::submitOrder(OrderId id, Side side, OrderType type, Price 
         ts = currentTimestampNs();
     }
 
-    // Handle FOK (Fill-Or-Kill) pre-check
-    if (type == OrderType::FOK) {
-        uint64_t availableVolume = 0;
-        if (side == Side::BUY) {
-            for (const auto& [askPrice, level] : m_asks) {
-                if (price > 0 && askPrice > price) break;
-                availableVolume += level.totalQuantity();
-                if (availableVolume >= qty) break;
-            }
-        } else {
-            for (const auto& [bidPrice, level] : m_bids) {
-                if (price > 0 && bidPrice < price) break;
-                availableVolume += level.totalQuantity();
-                if (availableVolume >= qty) break;
-            }
-        }
-
-        if (availableVolume < qty) {
-            return {OrderStatus::REJECTED_FOK_UNFILLED, {}, qty, false};
-        }
-    }
-
-    // Reserve enough room before mutating makers so recording fills cannot
-    // allocate partway through a match.
+    // Preflight liquidity, volume capacity and fill storage before changing the book.
     size_t maxTradeCount = 0;
+    uint64_t availableVolume = 0;
     if (side == Side::BUY) {
         for (const auto& [askPrice, level] : m_asks) {
             if (type != OrderType::MARKET && askPrice > price) break;
             maxTradeCount += level.orderCount();
+            availableVolume += level.totalQuantity();
+            if (availableVolume >= qty) break;
         }
     } else {
         for (const auto& [bidPrice, level] : m_bids) {
             if (type != OrderType::MARKET && bidPrice < price) break;
             maxTradeCount += level.orderCount();
+            availableVolume += level.totalQuantity();
+            if (availableVolume >= qty) break;
         }
+    }
+    if (type == OrderType::FOK && availableVolume < qty) {
+        return {OrderStatus::REJECTED_FOK_UNFILLED, {}, qty, false};
+    }
+    const auto expectedRemainder = static_cast<Quantity>(qty - std::min<uint64_t>(availableVolume, qty));
+    const Quantity ownVolume = side == Side::BUY ? m_bidVolume : m_askVolume;
+    if (type == OrderType::LIMIT && expectedRemainder > std::numeric_limits<Quantity>::max() - ownVolume) {
+        return {OrderStatus::REJECTED_CAPACITY, {}, qty, false};
     }
     std::vector<Trade> trades;
     trades.reserve(std::min<size_t>(maxTradeCount, qty));
@@ -192,6 +177,7 @@ void OrderBook::matchBuyOrder(Order* order, std::vector<Trade>& trades) {
             order->remainingQty -= fillQty;
             maker->remainingQty -= fillQty;
             level.decreaseQuantity(fillQty);
+            m_askVolume -= fillQty;
 
             if (maker->isFilled()) {
                 m_orderIndex.erase(maker->id);
@@ -248,6 +234,7 @@ void OrderBook::matchSellOrder(Order* order, std::vector<Trade>& trades) {
             order->remainingQty -= fillQty;
             maker->remainingQty -= fillQty;
             level.decreaseQuantity(fillQty);
+            m_bidVolume -= fillQty;
 
             if (maker->isFilled()) {
                 m_orderIndex.erase(maker->id);
@@ -289,6 +276,8 @@ void OrderBook::addOrderToBook(Order* order) {
                 return false;
             }
             level->second.append(order);
+            auto& volume = order->side == Side::BUY ? m_bidVolume : m_askVolume;
+            volume += order->remainingQty;
             return true;
         } catch (...) {
             if (createdLevel) side.erase(level);
@@ -329,6 +318,8 @@ bool OrderBook::cancelOrder(OrderId id) {
     }
 
     Order* order = it->second;
+    auto& volume = order->side == Side::BUY ? m_bidVolume : m_askVolume;
+    volume -= order->remainingQty;
     removeOrderFromBook(order);
     m_orderIndex.erase(it);
     m_pool.deallocate(order);
@@ -345,6 +336,8 @@ bool OrderBook::modifyOrder(OrderId id, Quantity newQty) {
     if (newQty < order->remainingQty) {
         // Reducing quantity retains queue priority!
         Quantity diff = order->remainingQty - newQty;
+        auto& volume = order->side == Side::BUY ? m_bidVolume : m_askVolume;
+        volume -= diff;
         order->remainingQty = newQty;
         if (order->side == Side::BUY) {
             m_bids[order->price].decreaseQuantity(diff);
@@ -353,11 +346,17 @@ bool OrderBook::modifyOrder(OrderId id, Quantity newQty) {
         }
         return true;
     } else if (newQty > order->remainingQty) {
-        // Increasing quantity loses queue priority (must re-queue)
-        Side side = order->side;
-        Price price = order->price;
-        cancelOrder(id);
-        addOrder(id, side, OrderType::LIMIT, price, newQty, currentTimestampNs());
+        auto& volume = order->side == Side::BUY ? m_bidVolume : m_askVolume;
+        const Quantity increase = newQty - order->remainingQty;
+        if (increase > std::numeric_limits<Quantity>::max() - volume) return false;
+        // The unchanged price remains uncrossed. Requeue without allocating a new node.
+        PriceLevel& level = order->side == Side::BUY ? m_bids.at(order->price) : m_asks.at(order->price);
+        level.remove(order);
+        order->remainingQty = newQty;
+        order->initialQty = newQty;
+        order->timestamp = currentTimestampNs();
+        level.append(order);
+        volume += increase;
         return true;
     }
 

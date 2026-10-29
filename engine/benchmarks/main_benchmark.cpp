@@ -180,7 +180,8 @@ void warmupEngine(const std::vector<PreGeneratedOp>& ops, size_t warmupCount) {
 SingleRunResult runSingleBenchmark(const std::vector<PreGeneratedOp>& workload) {
     size_t orderCount = workload.size();
 
-    // 1. Throughput Run (Pure engine matching, 0 clock queries in loop)
+    // 1. Throughput run: only the outer measurement queries the benchmark clock.
+    // Timestamp work performed by the engine API remains included.
     OrderBook throughputBook(orderCount);
     size_t totalTrades = 0;
     size_t cancelsAttempted = 0;
@@ -312,7 +313,7 @@ int main(int argc, char* argv[]) {
     std::cout << "[*] Workload Setup : Shadow-book pre-generated in RAM (0 RNG in hot loop)\n";
     std::cout << "[*] Workload Seed  : 1337 (50% add / 17% cancel / 8% modify / 17% cross / 8% sweep)\n";
     std::cout << "[*] Measurement    : Direct C++ OrderBook API; ctypes/FFI excluded\n";
-    std::cout << "[*] Cache Warm-Up  : 10,000 operations cache prime\n";
+    std::cout << "[*] Cache Warm-Up  : " << std::min<size_t>(10000, orderCount / 10) << " operations\n";
 #if defined(__clang__)
     std::cout << "[*] Compiler       : Clang " << __clang_version__ << "\n";
 #elif defined(__GNUC__)
